@@ -85,6 +85,10 @@ static int pending_addrmap_interesting;
 
 
 static int compare_line_numbers (const void *ln1p, const void *ln2p);
+
+static void record_pending_block (struct objfile *objfile,
+				  struct block *block,
+				  struct pending_block *opblock);
 
 
 /* Initial sizes of data structures.  These are realloc'd larger if
@@ -151,7 +155,7 @@ struct symbol *
 find_symbol_in_list (struct pending *list, char *name, int length)
 {
   int j;
-  char *pp;
+  const char *pp;
 
   while (list != NULL)
     {
@@ -400,7 +404,7 @@ finish_block (struct symbol *symbol, struct pending **listhead,
    Allocate the pending block struct in the objfile_obstack to save
    time.  This wastes a little space.  FIXME: Is it worth it?  */
 
-void
+static void
 record_pending_block (struct objfile *objfile, struct block *block,
 		      struct pending_block *opblock)
 {
@@ -1251,7 +1255,7 @@ pop_context (void)
 /* Compute a small integer hash code for the given name.  */
 
 int
-hashname (char *name)
+hashname (const char *name)
 {
     return (hash(name,strlen(name)) % HASHSIZE);
 }

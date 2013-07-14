@@ -1271,7 +1271,7 @@ typy_getitem (PyObject *self, PyObject *key)
   
   for (i = 0; i < TYPE_NFIELDS (type); i++)
     {
-      char *t_field_name = TYPE_FIELD_NAME (type, i);
+      const char *t_field_name = TYPE_FIELD_NAME (type, i);
 
       if (t_field_name && (strcmp_iw (t_field_name, field) == 0))
 	{
@@ -1332,7 +1332,7 @@ typy_has_key (PyObject *self, PyObject *args)
 
   for (i = 0; i < TYPE_NFIELDS (type); i++)
     {
-      char *t_field_name = TYPE_FIELD_NAME (type, i);
+      const char *t_field_name = TYPE_FIELD_NAME (type, i);
 
       if (t_field_name && (strcmp_iw (t_field_name, field) == 0))
 	Py_RETURN_TRUE;
@@ -1681,6 +1681,13 @@ static PyTypeObject type_object_type =
   0,				  /* tp_new */
 };
 
+static PyGetSetDef field_object_getset[] =
+{
+  { "__dict__", gdb_py_generic_dict, NULL,
+    "The __dict__ for this field.", &field_object_type },
+  { NULL }
+};
+
 static PyTypeObject field_object_type =
 {
   PyObject_HEAD_INIT (NULL)
@@ -1713,7 +1720,7 @@ static PyTypeObject field_object_type =
   0,				  /* tp_iternext */
   0,				  /* tp_methods */
   0,				  /* tp_members */
-  0,				  /* tp_getset */
+  field_object_getset,		  /* tp_getset */
   0,				  /* tp_base */
   0,				  /* tp_dict */
   0,				  /* tp_descr_get */

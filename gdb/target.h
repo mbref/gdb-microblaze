@@ -280,7 +280,9 @@ enum target_object
   /* Load maps for FDPIC systems.  */
   TARGET_OBJECT_FDPIC,
   /* Darwin dynamic linker info data.  */
-  TARGET_OBJECT_DARWIN_DYLD_INFO
+  TARGET_OBJECT_DARWIN_DYLD_INFO,
+  /* OpenVMS Unwind Information Block.  */
+  TARGET_OBJECT_OPENVMS_UIB
   /* Possible future objects: TARGET_OBJECT_FILE, ...  */
 };
 
@@ -509,6 +511,10 @@ struct target_ops
        target_* macro.  */
     void (*to_pass_signals) (int, unsigned char *);
 
+    /* Documentation of this routine is provided with the
+       corresponding target_* function.  */
+    void (*to_program_signals) (int, unsigned char *);
+
     int (*to_thread_alive) (struct target_ops *, ptid_t ptid);
     void (*to_find_new_threads) (struct target_ops *);
     char *(*to_pid_to_str) (struct target_ops *, ptid_t);
@@ -662,6 +668,10 @@ struct target_ops
     /* Does this target support the tracenz bytecode for string collection?  */
     int (*to_supports_string_tracing) (void);
 
+    /* Does this target support evaluation of breakpoint conditions on its
+       end?  */
+    int (*to_supports_evaluation_of_breakpoint_conditions) (void);
+
     /* Determine current architecture of thread PTID.
 
        The target is supposed to determine the architecture of the code where
@@ -680,6 +690,43 @@ struct target_ops
        address space.  */
     struct address_space *(*to_thread_address_space) (struct target_ops *,
 						      ptid_t);
+
+    /* Target file operations.  */
+
+    /* Open FILENAME on the target, using FLAGS and MODE.  Return a
+       target file descriptor, or -1 if an error occurs (and set
+       *TARGET_ERRNO).  */
+    int (*to_fileio_open) (const char *filename, int flags, int mode,
+			   int *target_errno);
+
+    /* Write up to LEN bytes from WRITE_BUF to FD on the target.
+       Return the number of bytes written, or -1 if an error occurs
+       (and set *TARGET_ERRNO).  */
+    int (*to_fileio_pwrite) (int fd, const gdb_byte *write_buf, int len,
+			     ULONGEST offset, int *target_errno);
+
+    /* Read up to LEN bytes FD on the target into READ_BUF.
+       Return the number of bytes read, or -1 if an error occurs
+       (and set *TARGET_ERRNO).  */
+    int (*to_fileio_pread) (int fd, gdb_byte *read_buf, int len,
+			    ULONGEST offset, int *target_errno);
+
+    /* Close FD on the target.  Return 0, or -1 if an error occurs
+       (and set *TARGET_ERRNO).  */
+    int (*to_fileio_close) (int fd, int *target_errno);
+
+    /* Unlink FILENAME on the target.  Return 0, or -1 if an error
+       occurs (and set *TARGET_ERRNO).  */
+    int (*to_fileio_unlink) (const char *filename, int *target_errno);
+
+    /* Read value of symbolic link FILENAME on the target.  Return a
+       null-terminated string allocated via xmalloc, or NULL if an error
+       occurs (and set *TARGET_ERRNO).  */
+    char *(*to_fileio_readlink) (const char *filename, int *target_errno);
+
+
+    /* Implement the "info proc" command.  */
+    void (*to_info_proc) (struct target_ops *, char *, enum info_proc_what);
 
     /* Tracepoint-related operations.  */
 
@@ -795,6 +842,13 @@ struct target_ops
        re-fetching when necessary.  */
     struct traceframe_info *(*to_traceframe_info) (void);
 
+    /* Ask the target to use or not to use agent according to USE.  Return 1
+       successful, 0 otherwise.  */
+    int (*to_use_agent) (int use);
+
+    /* Is the target able to use agent in current state?  */
+    int (*to_can_use_agent) (void);
+
     int to_magic;
     /* Need sub-structure for target machine related rather than comm related?
      */
@@ -820,10 +874,10 @@ extern struct target_ops current_target;
    longer going to be calling.  QUITTING indicates that GDB is exiting
    and should not get hung on an error (otherwise it is important to
    perform clean termination, even if it takes a while).  This routine
-   is automatically always called when popping the target off the
-   target stack (to_beneath is undefined).  Closing file descriptors
-   and freeing all memory allocated memory are typical things it
-   should do.  */
+   is automatically always called after popping the target off the
+   target stack - the target's own methods are no longer available
+   through the target vector.  Closing file descriptors and freeing all
+   memory allocated memory are typical things it should do.  */
 
 void target_close (struct target_ops *targ, int quitting);
 
@@ -908,6 +962,10 @@ extern void target_store_registers (struct regcache *regcache, int regs);
 
 struct address_space *target_thread_address_space (ptid_t);
 
+/* Implement the "info proc" command.  */
+
+void target_info_proc (char *, enum info_proc_what);
+
 /* Returns true if this target can debug multiple processes
    simultaneously.  */
 
@@ -926,6 +984,12 @@ int target_supports_disable_randomization (void);
 
 #define target_supports_string_tracing() \
   (*current_target.to_supports_string_tracing) ()
+
+/* Returns true if this target can handle breakpoint conditions
+   on its end.  */
+
+#define target_supports_evaluation_of_breakpoint_conditions() \
+  (*current_target.to_supports_evaluation_of_breakpoint_conditions) ()
 
 /* Invalidate all target dcaches.  */
 extern void target_dcache_invalidate (void);
@@ -1201,6 +1265,22 @@ void target_mourn_inferior (void);
 
 extern void target_pass_signals (int nsig, unsigned char *pass_signals);
 
+/* Set list of signals the target may pass to the inferior.  This
+   directly maps to the "handle SIGNAL pass/nopass" setting.
+
+   PROGRAM_SIGNALS is an array of size NSIG, indexed by target signal
+   number (enum target_signal).  For every signal whose entry in this
+   array is non-zero, the target is allowed to pass the signal to the
+   inferior.  Signals not present in the array shall be silently
+   discarded.  This does not influence whether to pass signals to the
+   inferior as a result of a target_resume call.  This is useful in
+   scenarios where the target needs to decide whether to pass or not a
+   signal to the inferior without GDB core involvement, such as for
+   example, when detaching (as threads may have been suspended with
+   pending signals not reported to GDB).  */
+
+extern void target_program_signals (int nsig, unsigned char *program_signals);
+
 /* Check to see if a thread is still alive.  */
 
 extern int target_thread_alive (ptid_t ptid);
@@ -1442,6 +1522,8 @@ extern int target_ranged_break_num_registers (void);
 #define target_stopped_data_address(target, addr_p) \
     (*target.to_stopped_data_address) (target, addr_p)
 
+/* Return non-zero if ADDR is within the range of a watchpoint spanning
+   LENGTH bytes beginning at START.  */
 #define target_watchpoint_addr_within_range(target, addr, start, length) \
   (*target.to_watchpoint_addr_within_range) (target, addr, start, length)
 
@@ -1488,6 +1570,59 @@ extern int target_search_memory (CORE_ADDR start_addr,
                                  const gdb_byte *pattern,
                                  ULONGEST pattern_len,
                                  CORE_ADDR *found_addrp);
+
+/* Target file operations.  */
+
+/* Open FILENAME on the target, using FLAGS and MODE.  Return a
+   target file descriptor, or -1 if an error occurs (and set
+   *TARGET_ERRNO).  */
+extern int target_fileio_open (const char *filename, int flags, int mode,
+			       int *target_errno);
+
+/* Write up to LEN bytes from WRITE_BUF to FD on the target.
+   Return the number of bytes written, or -1 if an error occurs
+   (and set *TARGET_ERRNO).  */
+extern int target_fileio_pwrite (int fd, const gdb_byte *write_buf, int len,
+				 ULONGEST offset, int *target_errno);
+
+/* Read up to LEN bytes FD on the target into READ_BUF.
+   Return the number of bytes read, or -1 if an error occurs
+   (and set *TARGET_ERRNO).  */
+extern int target_fileio_pread (int fd, gdb_byte *read_buf, int len,
+				ULONGEST offset, int *target_errno);
+
+/* Close FD on the target.  Return 0, or -1 if an error occurs
+   (and set *TARGET_ERRNO).  */
+extern int target_fileio_close (int fd, int *target_errno);
+
+/* Unlink FILENAME on the target.  Return 0, or -1 if an error
+   occurs (and set *TARGET_ERRNO).  */
+extern int target_fileio_unlink (const char *filename, int *target_errno);
+
+/* Read value of symbolic link FILENAME on the target.  Return a
+   null-terminated string allocated via xmalloc, or NULL if an error
+   occurs (and set *TARGET_ERRNO).  */
+extern char *target_fileio_readlink (const char *filename, int *target_errno);
+
+/* Read target file FILENAME.  The return value will be -1 if the transfer
+   fails or is not supported; 0 if the object is empty; or the length
+   of the object otherwise.  If a positive value is returned, a
+   sufficiently large buffer will be allocated using xmalloc and
+   returned in *BUF_P containing the contents of the object.
+
+   This method should be used for objects sufficiently small to store
+   in a single xmalloc'd buffer, when no fixed bound on the object's
+   size is known in advance.  */
+extern LONGEST target_fileio_read_alloc (const char *filename,
+					 gdb_byte **buf_p);
+
+/* Read target file FILENAME.  The result is NUL-terminated and
+   returned as a string, allocated using xmalloc.  If an error occurs
+   or the transfer is unsupported, NULL is returned.  Empty objects
+   are returned as allocated but empty strings.  A warning is issued
+   if the result contains any embedded NUL bytes.  */
+extern char *target_fileio_read_stralloc (const char *filename);
+
 
 /* Tracepoint-related operations.  */
 
@@ -1568,6 +1703,12 @@ extern int target_search_memory (CORE_ADDR start_addr,
 
 #define target_traceframe_info() \
   (*current_target.to_traceframe_info) ()
+
+#define target_use_agent(use) \
+  (*current_target.to_use_agent) (use)
+
+#define target_can_use_agent() \
+  (*current_target.to_can_use_agent) ()
 
 /* Command logging facility.  */
 
@@ -1720,16 +1861,6 @@ extern int remote_timeout;
 
 /* This is for native targets which use a unix/POSIX-style waitstatus.  */
 extern void store_waitstatus (struct target_waitstatus *, int);
-
-/* These are in common/signals.c, but they're only used by gdb.  */
-extern enum target_signal default_target_signal_from_host (struct gdbarch *,
-							   int);
-extern int default_target_signal_to_host (struct gdbarch *, 
-					  enum target_signal);
-
-/* Convert from a number used in a GDB command to an enum target_signal.  */
-extern enum target_signal target_signal_from_command (int);
-/* End of files in common/signals.c.  */
 
 /* Set the show memory breakpoints mode to show, and installs a cleanup
    to restore it back to the current value.  */

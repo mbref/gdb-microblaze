@@ -99,7 +99,7 @@ extern CORE_ADDR generic_skip_solib_resolver (struct gdbarch *gdbarch,
 					      CORE_ADDR pc);
 
 extern int generic_in_solib_return_trampoline (struct gdbarch *gdbarch,
-					       CORE_ADDR pc, char *name);
+					       CORE_ADDR pc, const char *name);
 
 extern int generic_in_function_epilogue_p (struct gdbarch *gdbarch,
 					   CORE_ADDR pc);
@@ -171,5 +171,10 @@ extern void default_gen_return_address (struct gdbarch *gdbarch,
 
 extern const char *default_auto_charset (void);
 extern const char *default_auto_wide_charset (void);
+
+extern enum target_signal default_target_signal_from_host (struct gdbarch *,
+							   int);
+extern int default_target_signal_to_host (struct gdbarch *,
+					  enum target_signal);
 
 #endif

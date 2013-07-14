@@ -164,10 +164,14 @@ partial_map_symtabs_matching_filename (struct objfile *objfile,
 {
   struct partial_symtab *pst;
   const char *name_basename = lbasename (name);
+  int name_len = strlen (name);
+  int is_abs = IS_ABSOLUTE_PATH (name);
 
   ALL_OBJFILE_PSYMTABS_REQUIRED (objfile, pst)
   {
-    if (FILENAME_CMP (name, pst->filename) == 0)
+    if (FILENAME_CMP (name, pst->filename) == 0
+	|| (!is_abs && compare_filenames_for_search (pst->filename,
+						     name, name_len)))
       {
 	if (partial_map_expand_apply (objfile, name, full_path, real_path,
 				      pst, callback, data))
@@ -186,7 +190,9 @@ partial_map_symtabs_matching_filename (struct objfile *objfile,
       {
 	psymtab_to_fullname (pst);
 	if (pst->fullname != NULL
-	    && FILENAME_CMP (full_path, pst->fullname) == 0)
+	    && (FILENAME_CMP (full_path, pst->fullname) == 0
+		|| (!is_abs && compare_filenames_for_search (pst->fullname,
+							     name, name_len))))
 	  {
 	    if (partial_map_expand_apply (objfile, name, full_path, real_path,
 					  pst, callback, data))
@@ -203,7 +209,10 @@ partial_map_symtabs_matching_filename (struct objfile *objfile,
             rp = gdb_realpath (pst->fullname);
             make_cleanup (xfree, rp);
           }
-	if (rp != NULL && FILENAME_CMP (real_path, rp) == 0)
+	if (rp != NULL
+	    && (FILENAME_CMP (real_path, rp) == 0
+		|| (!is_abs && compare_filenames_for_search (real_path,
+							     name, name_len))))
 	  {
 	    if (partial_map_expand_apply (objfile, name, full_path, real_path,
 					  pst, callback, data))
@@ -211,17 +220,6 @@ partial_map_symtabs_matching_filename (struct objfile *objfile,
 	  }
       }
   }
-
-  /* Now, search for a matching tail (only if name doesn't have any dirs).  */
-
-  if (name_basename == name)
-    ALL_OBJFILE_PSYMTABS_REQUIRED (objfile, pst)
-    {
-      if (FILENAME_CMP (lbasename (pst->filename), name) == 0)
-	if (partial_map_expand_apply (objfile, name, full_path, real_path, pst,
-				      callback, data))
-	  return 1;
-    }
 
   return 0;
 }
@@ -1133,10 +1131,6 @@ map_symbol_filenames_psymtab (struct objfile *objfile,
     }
 }
 
-int find_and_open_source (const char *filename,
-			  const char *dirname,
-			  char **fullname);
-
 /* Finds the fullname that a partial_symtab represents.
 
    If this functions finds the fullname, it will save it in ps->fullname
@@ -1252,7 +1246,7 @@ static void
 expand_symtabs_matching_via_partial
   (struct objfile *objfile,
    int (*file_matcher) (const char *, void *),
-   int (*name_matcher) (const struct language_defn *, const char *, void *),
+   int (*name_matcher) (const char *, void *),
    enum search_domain kind,
    void *data)
 {
@@ -1304,8 +1298,7 @@ expand_symtabs_matching_via_partial
 		       && SYMBOL_CLASS (*psym) == LOC_BLOCK)
 		   || (kind == TYPES_DOMAIN
 		       && SYMBOL_CLASS (*psym) == LOC_TYPEDEF))
-		  && (*name_matcher) (current_language,
-				      SYMBOL_NATURAL_NAME (*psym), data))
+		  && (*name_matcher) (SYMBOL_SEARCH_NAME (*psym), data))
 		{
 		  PSYMTAB_TO_SYMTAB (ps);
 		  keep_going = 0;
@@ -1569,18 +1562,7 @@ append_psymbol_to_list (struct psymbol_allocation_list *list,
    Since one arg is a struct, we pass in a ptr and deref it (sigh).
    Return the partial symbol that has been added.  */
 
-/* NOTE: carlton/2003-09-11: The reason why we return the partial
-   symbol is so that callers can get access to the symbol's demangled
-   name, which they don't have any cheap way to determine otherwise.
-   (Currenly, dwarf2read.c is the only file who uses that information,
-   though it's possible that other readers might in the future.)
-   Elena wasn't thrilled about that, and I don't blame her, but we
-   couldn't come up with a better way to get that information.  If
-   it's needed in other situations, we could consider breaking up
-   SYMBOL_SET_NAMES to provide access to the demangled name lookup
-   cache.  */
-
-const struct partial_symbol *
+void
 add_psymbol_to_list (const char *name, int namelength, int copy_name,
 		     domain_enum domain,
 		     enum address_class class,
@@ -1600,11 +1582,10 @@ add_psymbol_to_list (const char *name, int namelength, int copy_name,
   /* Do not duplicate global partial symbols.  */
   if (list == &objfile->global_psymbols
       && !added)
-    return psym;
+    return;
 
   /* Save pointer to partial symbol in psymtab, growing symtab if needed.  */
   append_psymbol_to_list (list, psym, objfile);
-  return psym;
 }
 
 /* Initialize storage for partial symbols.  */
@@ -1945,8 +1926,7 @@ maintenance_check_symtabs (char *ignore, int from_tty)
 
 
 void
-expand_partial_symbol_names (int (*fun) (const struct language_defn *,
-					 const char *, void *),
+expand_partial_symbol_names (int (*fun) (const char *, void *),
 			     void *data)
 {
   struct objfile *objfile;

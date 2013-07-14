@@ -321,34 +321,80 @@ cplusplus_error (const char *name, const char *fmt, ...)
   throw_error (NOT_FOUND_ERROR, "%s", message);
 }
 
+/* A callback function and the additional data to call it with.  */
+
+struct symbol_and_data_callback
+{
+  /* The callback to use.  */
+  symbol_found_callback_ftype *callback;
+
+  /* Data to be passed to the callback.  */
+  void *data;
+};
+
+/* A helper for iterate_over_all_matching_symtabs that is used to
+   restrict calls to another callback to symbols representing inline
+   symbols only.  */
+
+static int
+iterate_inline_only (struct symbol *sym, void *d)
+{
+  if (SYMBOL_INLINED (sym))
+    {
+      struct symbol_and_data_callback *cad = d;
+
+      return cad->callback (sym, cad->data);
+    }
+  return 1; /* Continue iterating.  */
+}
+
+/* Some data for the expand_symtabs_matching callback.  */
+
+struct symbol_matcher_data
+{
+  /* The lookup name against which symbol name should be compared.  */
+  const char *lookup_name;
+
+  /* The routine to be used for comparison.  */
+  symbol_name_cmp_ftype symbol_name_cmp;
+};
+
 /* A helper for iterate_over_all_matching_symtabs that is passed as a
    callback to the expand_symtabs_matching method.  */
 
 static int
-iterate_name_matcher (const struct language_defn *language,
-		      const char *name, void *d)
+iterate_name_matcher (const char *name, void *d)
 {
-  const char **dname = d;
+  const struct symbol_matcher_data *data = d;
 
-  if (language->la_symbol_name_compare (name, *dname) == 0)
-    return 1;
-  return 0;
+  if (data->symbol_name_cmp (name, data->lookup_name) == 0)
+    return 1; /* Expand this symbol's symbol table.  */
+  return 0; /* Skip this symbol.  */
 }
 
 /* A helper that walks over all matching symtabs in all objfiles and
    calls CALLBACK for each symbol matching NAME.  If SEARCH_PSPACE is
    not NULL, then the search is restricted to just that program
-   space.  */
+   space.  If INCLUDE_INLINE is nonzero then symbols representing
+   inlined instances of functions will be included in the result.  */
 
 static void
 iterate_over_all_matching_symtabs (const char *name,
 				   const domain_enum domain,
-				   int (*callback) (struct symbol *, void *),
+				   symbol_found_callback_ftype *callback,
 				   void *data,
-				   struct program_space *search_pspace)
+				   struct program_space *search_pspace,
+				   int include_inline)
 {
   struct objfile *objfile;
   struct program_space *pspace;
+  struct symbol_matcher_data matcher_data;
+
+  matcher_data.lookup_name = name;
+  matcher_data.symbol_name_cmp =
+    current_language->la_get_symbol_name_cmp != NULL
+    ? current_language->la_get_symbol_name_cmp (name)
+    : strcmp_iw;
 
   ALL_PSPACES (pspace)
   {
@@ -367,7 +413,7 @@ iterate_over_all_matching_symtabs (const char *name,
 	objfile->sf->qf->expand_symtabs_matching (objfile, NULL,
 						  iterate_name_matcher,
 						  ALL_DOMAIN,
-						  &name);
+						  &matcher_data);
 
       ALL_OBJFILE_SYMTABS (objfile, symtab)
 	{
@@ -377,6 +423,20 @@ iterate_over_all_matching_symtabs (const char *name,
 
 	      block = BLOCKVECTOR_BLOCK (BLOCKVECTOR (symtab), STATIC_BLOCK);
 	      LA_ITERATE_OVER_SYMBOLS (block, name, domain, callback, data);
+
+	      if (include_inline)
+		{
+		  struct symbol_and_data_callback cad = { callback, data };
+		  int i;
+
+		  for (i = FIRST_LOCAL_BLOCK;
+		       i < BLOCKVECTOR_NBLOCKS (BLOCKVECTOR (symtab)); i++)
+		    {
+		      block = BLOCKVECTOR_BLOCK (BLOCKVECTOR (symtab), i);
+		      LA_ITERATE_OVER_SYMBOLS (block, name, domain,
+					       iterate_inline_only, &cad);
+		    }
+		}
 	    }
 	}
     }
@@ -418,8 +478,7 @@ find_methods (struct type *t, const char *name,
 {
   int i1 = 0;
   int ibase;
-  char *class_name = type_name_no_tag (t);
-  char *canon;
+  const char *class_name = type_name_no_tag (t);
 
   /* Ignore this class if it doesn't have a name.  This is ugly, but
      unless we figure out how to get the physname without the name of
@@ -439,7 +498,7 @@ find_methods (struct type *t, const char *name,
 	   method_counter >= 0;
 	   --method_counter)
 	{
-	  char *method_name = TYPE_FN_FIELDLIST_NAME (t, method_counter);
+	  const char *method_name = TYPE_FN_FIELDLIST_NAME (t, method_counter);
 	  char dem_opname[64];
 
 	  if (strncmp (method_name, "__", 2) == 0 ||
@@ -633,6 +692,11 @@ decode_line_2 (struct linespec_state *self,
       convert_results_to_lsals (self, result);
       return;
     }
+
+  /* Sort the list of method names alphabetically.  */
+  qsort (VEC_address (const_char_ptr, item_names),
+	 VEC_length (const_char_ptr, item_names),
+	 sizeof (const_char_ptr), compare_strings);
 
   printf_unfiltered (_("[0] cancel\n[1] all\n"));
   for (i = 0; VEC_iterate (const_char_ptr, item_names, i, iter); ++i)
@@ -830,7 +894,7 @@ keep_name_info (char *p, int on_boundary)
    lack of single quotes.  FIXME: write a linespec_completer which we
    can use as appropriate instead of make_symbol_completion_list.  */
 
-struct symtabs_and_lines
+static struct symtabs_and_lines
 decode_line_internal (struct linespec_state *self, char **argptr)
 {
   char *p;
@@ -887,37 +951,51 @@ decode_line_internal (struct linespec_state *self, char **argptr)
 
   /* Locate the end of the first half of the linespec.
      After the call, for instance, if the argptr string is "foo.c:123"
-     p will point at "123".  If there is only one part, like "foo", p
+     p will point at ":123".  If there is only one part, like "foo", p
      will point to "".  If this is a C++ name, like "A::B::foo", p will
      point to "::B::foo".  Argptr is not changed by this call.  */
 
   first_half = p = locate_first_half (argptr, &is_quote_enclosed);
 
   /* First things first: if ARGPTR starts with a filename, get its
-     symtab and strip the filename from ARGPTR.  */
-  TRY_CATCH (file_exception, RETURN_MASK_ERROR)
-    {
-      self->file_symtabs = symtabs_from_filename (argptr, p, is_quote_enclosed,
-						  &self->user_filename);
-    }
+     symtab and strip the filename from ARGPTR.
+     Avoid calling symtab_from_filename if we know can,
+     it can be expensive.  We know we can avoid the call if we see a
+     single word (e.g., "break NAME") or if we see a qualified C++
+     name ("break QUAL::NAME").  */
 
-  if (VEC_empty (symtab_p, self->file_symtabs))
+  if (*p != '\0' && !(p[0] == ':' && p[1] == ':'))
+    {
+      TRY_CATCH (file_exception, RETURN_MASK_ERROR)
+	{
+	  self->file_symtabs = symtabs_from_filename (argptr, p,
+						      is_quote_enclosed,
+						      &self->user_filename);
+	}
+
+      if (file_exception.reason >= 0)
+	{
+	  /* Check for single quotes on the non-filename part.  */
+	  is_quoted = (**argptr
+		       && strchr (get_gdb_completer_quote_characters (),
+				  **argptr) != NULL);
+	  if (is_quoted)
+	    end_quote = skip_quoted (*argptr);
+
+	  /* Locate the next "half" of the linespec.  */
+	  first_half = p = locate_first_half (argptr, &is_quote_enclosed);
+	}
+
+      if (VEC_empty (symtab_p, self->file_symtabs))
+	{
+	  /* A NULL entry means to use GLOBAL_DEFAULT_SYMTAB.  */
+	  VEC_safe_push (symtab_p, self->file_symtabs, NULL);
+	}
+    }
+  else
     {
       /* A NULL entry means to use GLOBAL_DEFAULT_SYMTAB.  */
       VEC_safe_push (symtab_p, self->file_symtabs, NULL);
-    }
-
-  if (file_exception.reason >= 0)
-    {
-      /* Check for single quotes on the non-filename part.  */
-      is_quoted = (**argptr
-		   && strchr (get_gdb_completer_quote_characters (),
-			      **argptr) != NULL);
-      if (is_quoted)
-	end_quote = skip_quoted (*argptr);
-
-      /* Locate the next "half" of the linespec.  */
-      first_half = p = locate_first_half (argptr, &is_quote_enclosed);
     }
 
   /* Check if this is an Objective-C method (anything that starts with
@@ -951,33 +1029,44 @@ decode_line_internal (struct linespec_state *self, char **argptr)
 	
       if (p[0] == '.' || p[1] == ':')
 	{
-	  struct symtabs_and_lines values;
-	  volatile struct gdb_exception ex;
-	  char *saved_argptr = *argptr;
-
-	  if (is_quote_enclosed)
-	    ++saved_arg;
-
-	  /* Initialize it just to avoid a GCC false warning.  */
-	  memset (&values, 0, sizeof (values));
-
-	  TRY_CATCH (ex, RETURN_MASK_ERROR)
+	 /* We only perform this check for the languages where it might
+	    make sense.  For instance, Ada does not use this type of
+	    syntax, and trying to apply this logic on an Ada linespec
+	    may trigger a spurious error (for instance, decode_compound
+	    does not like expressions such as `ops."<"', which is a
+	    valid function name in Ada).  */
+	  if (current_language->la_language == language_c
+	      || current_language->la_language == language_cplus
+	      || current_language->la_language == language_java)
 	    {
-	      values = decode_compound (self, argptr, saved_arg, p);
+	      struct symtabs_and_lines values;
+	      volatile struct gdb_exception ex;
+	      char *saved_argptr = *argptr;
+
+	      if (is_quote_enclosed)
+		++saved_arg;
+
+	      /* Initialize it just to avoid a GCC false warning.  */
+	      memset (&values, 0, sizeof (values));
+
+	      TRY_CATCH (ex, RETURN_MASK_ERROR)
+		{
+		  values = decode_compound (self, argptr, saved_arg, p);
+		}
+	      if ((is_quoted || is_squote_enclosed) && **argptr == '\'')
+		*argptr = *argptr + 1;
+
+	      if (ex.reason >= 0)
+		{
+		  do_cleanups (cleanup);
+		  return values;
+		}
+
+	      if (ex.error != NOT_FOUND_ERROR)
+		throw_exception (ex);
+
+	      *argptr = saved_argptr;
 	    }
-	  if ((is_quoted || is_squote_enclosed) && **argptr == '\'')
-	    *argptr = *argptr + 1;
-
-	  if (ex.reason >= 0)
-	    {
-	      do_cleanups (cleanup);
-	      return values;
-	    }
-
-	  if (ex.error != NOT_FOUND_ERROR)
-	    throw_exception (ex);
-
-	  *argptr = saved_argptr;
 	}
       else
 	{
@@ -1328,6 +1417,24 @@ locate_first_half (char **argptr, int *is_quote_enclosed)
   char *ii;
   char *p, *p1;
   int has_comma;
+
+  /* Check if the linespec starts with an Ada operator (such as "+",
+     or ">", for instance).  */
+  p = *argptr;
+  if (p[0] == '"'
+      && current_language->la_language == language_ada)
+    {
+      const struct ada_opname_map *op;
+
+      for (op = ada_opname_table; op->encoded != NULL; op++)
+        if (strncmp (op->decoded, p, strlen (op->decoded)) == 0)
+	  break;
+      if (op->encoded != NULL)
+	{
+	  *is_quote_enclosed = 0;
+	  return p + strlen (op->decoded);
+	}
+    }
 
   /* Maybe we were called with a line range FILENAME:LINENUM,FILENAME:LINENUM
      and we must isolate the first half.  Outer layers will call again later
@@ -1750,14 +1857,14 @@ collect_one_symbol (struct symbol *sym, void *d)
   struct type *t;
 
   if (SYMBOL_CLASS (sym) != LOC_TYPEDEF)
-    return 1;
+    return 1; /* Continue iterating.  */
 
   t = SYMBOL_TYPE (sym);
   CHECK_TYPEDEF (t);
   if (TYPE_CODE (t) != TYPE_CODE_STRUCT
       && TYPE_CODE (t) != TYPE_CODE_UNION
       && TYPE_CODE (t) != TYPE_CODE_NAMESPACE)
-    return 1;
+    return 1; /* Continue iterating.  */
 
   slot = htab_find_slot (collector->unique_syms, sym, INSERT);
   if (!*slot)
@@ -1766,7 +1873,7 @@ collect_one_symbol (struct symbol *sym, void *d)
       VEC_safe_push (symbolp, collector->symbols, sym);
     }
 
-  return 1;
+  return 1; /* Continue iterating.  */
 }
 
 /* Return the symbol corresponding to the substring of *ARGPTR ending
@@ -1821,10 +1928,10 @@ lookup_prefix_sym (char **argptr, char *p, VEC (symtab_p) *file_symtabs,
 	{
 	  iterate_over_all_matching_symtabs (copy, STRUCT_DOMAIN,
 					     collect_one_symbol, &collector,
-					     NULL);
+					     NULL, 0);
 	  iterate_over_all_matching_symtabs (copy, VAR_DOMAIN,
 					     collect_one_symbol, &collector,
-					     NULL);
+					     NULL, 0);
 	}
       else
 	{
@@ -2157,7 +2264,7 @@ collect_function_symbols (struct symbol *sym, void *arg)
   if (SYMBOL_CLASS (sym) == LOC_BLOCK)
     VEC_safe_push (symbolp, *syms, sym);
 
-  return 1;
+  return 1; /* Continue iterating.  */
 }
 
 /* Look up a function symbol in *ARGPTR.  If found, advance *ARGPTR
@@ -2187,7 +2294,8 @@ find_function_symbols (char **argptr, char *p, int is_quote_enclosed,
     copy[p - *argptr] = 0;
 
   iterate_over_all_matching_symtabs (copy, VAR_DOMAIN,
-				     collect_function_symbols, &result, NULL);
+				     collect_function_symbols, &result, NULL,
+				     0);
 
   if (VEC_empty (symbolp, result))
     VEC_free (symbolp, result);
@@ -2664,7 +2772,7 @@ collect_symbols (struct symbol *sym, void *data)
     add_sal_to_sals (info->state, &info->result, &sal,
 		     SYMBOL_NATURAL_NAME (sym));
 
-  return 1;
+  return 1; /* Continue iterating.  */
 }
 
 /* We've found a minimal symbol MSYMBOL to associate with our
@@ -2888,7 +2996,7 @@ add_matching_symbols_to_info (const char *name,
 	{
 	  iterate_over_all_matching_symtabs (name, VAR_DOMAIN,
 					     collect_symbols, info,
-					     pspace);
+					     pspace, 1);
 	  search_minsyms_for_name (info, name, pspace);
 	}
       else if (pspace == NULL || pspace == SYMTAB_PSPACE (elt))

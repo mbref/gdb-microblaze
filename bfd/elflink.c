@@ -2510,23 +2510,21 @@ _bfd_elf_fix_symbol_flags (struct elf_link_hash_entry *h,
      over to the real definition.  */
   if (h->u.weakdef != NULL)
     {
-      struct elf_link_hash_entry *weakdef;
-
-      weakdef = h->u.weakdef;
-      while (h->root.type == bfd_link_hash_indirect)
-	h = (struct elf_link_hash_entry *) h->root.u.i.link;
-
-      BFD_ASSERT (h->root.type == bfd_link_hash_defined
-		  || h->root.type == bfd_link_hash_defweak);
-      BFD_ASSERT (weakdef->def_dynamic);
-
       /* If the real definition is defined by a regular object file,
 	 don't do anything special.  See the longer description in
 	 _bfd_elf_adjust_dynamic_symbol, below.  */
-      if (weakdef->def_regular)
+      if (h->u.weakdef->def_regular)
 	h->u.weakdef = NULL;
       else
 	{
+	  struct elf_link_hash_entry *weakdef = h->u.weakdef;
+
+	  while (h->root.type == bfd_link_hash_indirect)
+	    h = (struct elf_link_hash_entry *) h->root.u.i.link;
+
+	  BFD_ASSERT (h->root.type == bfd_link_hash_defined
+		      || h->root.type == bfd_link_hash_defweak);
+	  BFD_ASSERT (weakdef->def_dynamic);
 	  BFD_ASSERT (weakdef->root.type == bfd_link_hash_defined
 		      || weakdef->root.type == bfd_link_hash_defweak);
 	  (*bed->elf_backend_copy_indirect_symbol) (eif->info, weakdef, h);
@@ -9749,23 +9747,12 @@ elf_link_input_bfd (struct elf_final_link_info *finfo, bfd *input_bfd)
 			      r_symndx = osec->target_index;
 			      if (r_symndx == STN_UNDEF)
 				{
-				  struct elf_link_hash_table *htab;
-				  asection *oi;
-
-				  htab = elf_hash_table (finfo->info);
-				  oi = htab->text_index_section;
-				  if ((osec->flags & SEC_READONLY) == 0
-				      && htab->data_index_section != NULL)
-				    oi = htab->data_index_section;
-
-				  if (oi != NULL)
-				    {
-				      irela->r_addend += osec->vma - oi->vma;
-				      r_symndx = oi->target_index;
-				    }
+				  irela->r_addend += osec->vma;
+				  osec = _bfd_nearby_section (output_bfd, osec,
+							      osec->vma);
+				  irela->r_addend -= osec->vma;
+				  r_symndx = osec->target_index;
 				}
-
-			      BFD_ASSERT (r_symndx != STN_UNDEF);
 			    }
 			}
 
@@ -11575,6 +11562,12 @@ _bfd_elf_gc_mark_rsec (struct bfd_link_info *info, asection *sec,
 	     || h->root.type == bfd_link_hash_warning)
 	h = (struct elf_link_hash_entry *) h->root.u.i.link;
       h->mark = 1;
+      /* If this symbol is weak and there is a non-weak definition, we
+	 keep the non-weak definition because many backends put
+	 dynamic reloc info on the non-weak definition for code
+	 handling copy relocs.  */
+      if (h->u.weakdef != NULL)
+	h->u.weakdef->mark = 1;
       return (*gc_mark_hook) (sec, info, cookie->rel, h, NULL);
     }
 
@@ -11597,7 +11590,8 @@ _bfd_elf_gc_mark_reloc (struct bfd_link_info *info,
   rsec = _bfd_elf_gc_mark_rsec (info, sec, gc_mark_hook, cookie);
   if (rsec && !rsec->gc_mark)
     {
-      if (bfd_get_flavour (rsec->owner) != bfd_target_elf_flavour)
+      if (bfd_get_flavour (rsec->owner) != bfd_target_elf_flavour
+	  || (rsec->owner->flags & DYNAMIC) != 0)
 	rsec->gc_mark = 1;
       else if (!_bfd_elf_gc_mark (info, rsec, gc_mark_hook))
 	return FALSE;

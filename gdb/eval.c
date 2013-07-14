@@ -41,7 +41,6 @@
 #include "gdb_obstack.h"
 #include "objfiles.h"
 #include "python/python.h"
-#include "wrapper.h"
 
 #include "gdb_assert.h"
 
@@ -234,9 +233,21 @@ fetch_subexp_value (struct expression *exp, int *pc, struct value **valp,
 
   /* Make sure it's not lazy, so that after the target stops again we
      have a non-lazy previous value to compare with.  */
-  if (result != NULL
-      && (!value_lazy (result) || gdb_value_fetch_lazy (result)))
-    *valp = result;
+  if (result != NULL)
+    {
+      if (!value_lazy (result))
+	*valp = result;
+      else
+	{
+	  volatile struct gdb_exception except;
+
+	  TRY_CATCH (except, RETURN_MASK_ERROR)
+	    {
+	      value_fetch_lazy (result);
+	      *valp = result;
+	    }
+	}
+    }
 
   if (val_chain)
     {
@@ -324,7 +335,8 @@ evaluate_struct_tuple (struct value *struct_val,
 	      for (fieldno = 0; fieldno < TYPE_NFIELDS (struct_type);
 		   fieldno++)
 		{
-		  char *field_name = TYPE_FIELD_NAME (struct_type, fieldno);
+		  const char *field_name =
+		    TYPE_FIELD_NAME (struct_type, fieldno);
 
 		  if (field_name != NULL && strcmp (field_name, label) == 0)
 		    {
@@ -337,7 +349,8 @@ evaluate_struct_tuple (struct value *struct_val,
 	      for (fieldno = 0; fieldno < TYPE_NFIELDS (struct_type);
 		   fieldno++)
 		{
-		  char *field_name = TYPE_FIELD_NAME (struct_type, fieldno);
+		  const char *field_name =
+		    TYPE_FIELD_NAME (struct_type, fieldno);
 
 		  field_type = TYPE_FIELD_TYPE (struct_type, fieldno);
 		  if ((field_name == 0 || *field_name == '\0')
@@ -1988,16 +2001,10 @@ evaluate_subexp_standard (struct type *expect_type,
         if (opts.objectprint && TYPE_TARGET_TYPE(type)
             && (TYPE_CODE (TYPE_TARGET_TYPE (type)) == TYPE_CODE_CLASS))
           {
-            real_type = value_rtti_target_type (arg1, &full, &top, &using_enc);
+            real_type = value_rtti_indirect_type (arg1, &full, &top,
+						  &using_enc);
             if (real_type)
-              {
-                if (TYPE_CODE (type) == TYPE_CODE_PTR)
-                  real_type = lookup_pointer_type (real_type);
-                else
-                  real_type = lookup_reference_type (real_type);
-
                 arg1 = value_cast (real_type, arg1);
-              }
           }
       }
 

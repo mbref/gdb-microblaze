@@ -153,7 +153,7 @@ struct quick_symbol_functions
   /* Expand and iterate over each "partial" symbol table in OBJFILE
      where the source file is named NAME.
 
-     If there is no '/' in the name, a match after a '/' in the symbol
+     If NAME is not absolute, a match after a '/' in the symbol
      table's file name will also work.  FULL_PATH is the absolute file
      name, and REAL_PATH is the same, run through gdb_realpath.
 
@@ -258,13 +258,10 @@ struct quick_symbol_functions
      file is skipped.  If FILE_MATCHER is NULL such file is not skipped.
 
      Otherwise, if KIND does not match this symbol is skipped.
-     
+
      If even KIND matches, then NAME_MATCHER is called for each symbol
-     defined in the file.  The current language, the symbol name and
-     DATA are passed to NAME_MATCHER.  The symbol "natural" name should
-     be passed to NAME_MATCHER for all languages except Ada, where
-     the encoded name is passed instead (see la_symbol_name_compare in
-     struct language_defn for more details on this).
+     defined in the file.  The symbol "search" name and DATA are passed
+     to NAME_MATCHER.
 
      If NAME_MATCHER returns zero, then this symbol is skipped.
 
@@ -275,7 +272,7 @@ struct quick_symbol_functions
   void (*expand_symtabs_matching)
     (struct objfile *objfile,
      int (*file_matcher) (const char *, void *),
-     int (*name_matcher) (const struct language_defn *, const char *, void *),
+     int (*name_matcher) (const char *, void *),
      enum search_domain kind,
      void *data);
 
@@ -619,6 +616,9 @@ extern void dwarf2_build_psymtabs (struct objfile *);
 extern void dwarf2_build_frame_info (struct objfile *);
 
 void dwarf2_free_objfile (struct objfile *);
+
+/* Whether to use deprecated .gdb_index sections.  */
+extern int use_deprecated_index_sections;
 
 /* From mdebugread.c */
 

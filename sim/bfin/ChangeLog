@@ -1,4 +1,58 @@
-2012-04-12  Mike Frysinger  <vapier@gentoo.org>
+2012-04-01  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin-sim.c (_interp_insn_bfin): Call illegal_instruction_combination
+	when INSN_LEN is non-zero before 32bit decode.
+
+2012-04-01  Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin-dis.c (fmtconst): Replace decimal handling with a single
+	sprintf call and the '*' field width.
+
+2012-04-01  Mike Frysinger  <vapier@gentoo.org>
+
+	* machs.c (bfin_model_map_bfrom): Return when mnum is 535.
+
+2012-04-01  Mike Frysinger  <vapier@gentoo.org>
+
+	* interp.c (bfin_user_init): Move auxvt_size decl from top to
+	inside of auxvt check.
+
+2012-03-31  Mike Frysinger  <vapier@gentoo.org>
+
+	* dv-bfin_sic.c (bfin_sic_finish): Change iwr1 to iwr2.
+
+2012-03-31  Mike Frysinger  <vapier@gentoo.org>
+
+	* devices.c: Include devices.h.
+
+2012-03-24  Mike Frysinger  <vapier@gentoo.org>
+
+	* aclocal.m4, config.in, configure: Regenerate.
+
+2012-03-19  Robin Getz  <robin.getz@analog.com>
+	    Mike Frysinger  <vapier@gentoo.org>
+
+	* bfin-sim.c (lshift): Add an overflow flag.  Delete now unused
+	i, j, and tmp vars.  Add a new v_i var.  Split the overflow logic
+	out from the saturate logic.  Do not set V ASTAT bits when working
+	with accumulators.
+	(decode_ALU2op_0): Add new argument to lshift call.
+	(decode_LOGI2op_0, decode_dsp32shift_0, decode_dsp32shiftimm_0):
+	Likewise.
+
+2012-03-18  Mike Frysinger  <vapier@gentoo.org>
+
+	* dv-bfin_ebiu_amc.c (struct bfin_ebiu_amc): Add bank_base.
+	(bfin_ebiu_amc_write_amgctl): Replace BFIN_EBIU_AMC_BASE with
+	amc->bank_base.
+	(bfin_ebiu_amc_finish): Assign BFIN_EBIU_AMC_BASE to amc->bank_base.
+
+2012-03-18  Mike Frysinger  <vapier@gentoo.org>
+
+	* dv-bfin_ebiu_amc.c (bfin_ebiu_amc_attach_address_callback): Use
+	ARRAY_SIZE rather than hardcoded constant.
+
+2012-02-04  Mike Frysinger  <vapier@gentoo.org>
 
 	* config.in: Regenerate.
 	* configure: Likewise.

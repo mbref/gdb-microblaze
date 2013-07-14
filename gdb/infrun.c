@@ -335,6 +335,15 @@ static unsigned char *signal_pass;
 	(flags)[signum] = 0; \
   } while (0)
 
+/* Update the target's copy of SIGNAL_PROGRAM.  The sole purpose of
+   this function is to avoid exporting `signal_program'.  */
+
+void
+update_signals_program_target (void)
+{
+  target_program_signals ((int) TARGET_SIGNAL_LAST, signal_program);
+}
+
 /* Value to pass to target_resume() to cause all threads to resume.  */
 
 #define RESUME_ALL minus_one_ptid
@@ -389,7 +398,7 @@ void init_infwait_state (void);
 static const char follow_fork_mode_child[] = "child";
 static const char follow_fork_mode_parent[] = "parent";
 
-static const char *follow_fork_mode_kind_names[] = {
+static const char *const follow_fork_mode_kind_names[] = {
   follow_fork_mode_child,
   follow_fork_mode_parent,
   NULL
@@ -739,6 +748,7 @@ handle_vfork_child_exec_or_exit (int exec)
 	  pspace = add_program_space (maybe_new_address_space ());
 	  set_current_program_space (pspace);
 	  inf->removable = 1;
+	  inf->symfile_flags = SYMFILE_NO_READ;
 	  clone_program_space (pspace, inf->vfork_parent->pspace);
 	  inf->pspace = pspace;
 	  inf->aspace = pspace->aspace;
@@ -778,7 +788,7 @@ handle_vfork_child_exec_or_exit (int exec)
 
 static const char follow_exec_mode_new[] = "new";
 static const char follow_exec_mode_same[] = "same";
-static const char *follow_exec_mode_names[] =
+static const char *const follow_exec_mode_names[] =
 {
   follow_exec_mode_new,
   follow_exec_mode_same,
@@ -900,10 +910,13 @@ follow_exec (ptid_t pid, char *execd_pathname)
      solib_create_inferior_hook below.  breakpoint_re_set would fail to insert
      the breakpoints with the zero displacement.  */
 
-  symbol_file_add (execd_pathname, SYMFILE_MAINLINE | SYMFILE_DEFER_BP_RESET,
+  symbol_file_add (execd_pathname,
+		   (inf->symfile_flags
+		    | SYMFILE_MAINLINE | SYMFILE_DEFER_BP_RESET),
 		   NULL, 0);
 
-  set_initial_language ();
+  if ((inf->symfile_flags & SYMFILE_NO_READ) == 0)
+    set_initial_language ();
 
 #ifdef SOLIB_CREATE_INFERIOR_HOOK
   SOLIB_CREATE_INFERIOR_HOOK (PIDGET (inferior_ptid));
@@ -1175,7 +1188,7 @@ infrun_inferior_exit (struct inferior *inf)
 static const char can_use_displaced_stepping_auto[] = "auto";
 static const char can_use_displaced_stepping_on[] = "on";
 static const char can_use_displaced_stepping_off[] = "off";
-static const char *can_use_displaced_stepping_enum[] =
+static const char *const can_use_displaced_stepping_enum[] =
 {
   can_use_displaced_stepping_auto,
   can_use_displaced_stepping_on,
@@ -1579,7 +1592,7 @@ resume_cleanups (void *ignore)
 static const char schedlock_off[] = "off";
 static const char schedlock_on[] = "on";
 static const char schedlock_step[] = "step";
-static const char *scheduler_enums[] = {
+static const char *const scheduler_enums[] = {
   schedlock_off,
   schedlock_on,
   schedlock_step,
@@ -2367,7 +2380,7 @@ struct execution_control_state
   int stop_func_filled_in;
   CORE_ADDR stop_func_start;
   CORE_ADDR stop_func_end;
-  char *stop_func_name;
+  const char *stop_func_name;
   int new_thread_event;
   int wait_some_more;
 };
@@ -2700,10 +2713,6 @@ wait_for_inferior (void)
 	 knowledge of the executing state to the frontend/user running
 	 state.  */
       old_chain = make_cleanup (finish_thread_state_cleanup, &minus_one_ptid);
-
-      if (ecs->ws.kind == TARGET_WAITKIND_SYSCALL_ENTRY
-          || ecs->ws.kind == TARGET_WAITKIND_SYSCALL_RETURN)
-        ecs->ws.value.syscall_number = UNKNOWN_SYSCALL;
 
       /* Now figure out what to do with the result of the result.  */
       handle_inferior_event (ecs);
@@ -3072,10 +3081,8 @@ handle_syscall_event (struct execution_control_state *ecs)
 
   regcache = get_thread_regcache (ecs->ptid);
   gdbarch = get_regcache_arch (regcache);
-  syscall_number = gdbarch_get_syscall_number (gdbarch, ecs->ptid);
+  syscall_number = ecs->ws.value.syscall_number;
   stop_pc = regcache_read_pc (regcache);
-
-  target_last_waitstatus.value.syscall_number = syscall_number;
 
   if (catch_syscall_enabled () > 0
       && catching_syscall_number (syscall_number) > 0)
@@ -3086,7 +3093,7 @@ handle_syscall_event (struct execution_control_state *ecs)
 
       ecs->event_thread->control.stop_bpstat
 	= bpstat_stop_status (get_regcache_aspace (regcache),
-			      stop_pc, ecs->ptid);
+			      stop_pc, ecs->ptid, &ecs->ws);
       ecs->random_signal
 	= !bpstat_explains_signal (ecs->event_thread->control.stop_bpstat);
 
@@ -3322,28 +3329,32 @@ handle_inferior_event (struct execution_control_state *ecs)
          established.  */
       if (stop_soon == NO_STOP_QUIETLY)
 	{
-	  /* Check for any newly added shared libraries if we're
-	     supposed to be adding them automatically.  Switch
-	     terminal for any messages produced by
-	     breakpoint_re_set.  */
-	  target_terminal_ours_for_output ();
-	  /* NOTE: cagney/2003-11-25: Make certain that the target
-	     stack's section table is kept up-to-date.  Architectures,
-	     (e.g., PPC64), use the section table to perform
-	     operations such as address => section name and hence
-	     require the table to contain all sections (including
-	     those found in shared libraries).  */
-#ifdef SOLIB_ADD
-	  SOLIB_ADD (NULL, 0, &current_target, auto_solib_add);
-#else
-	  solib_add (NULL, 0, &current_target, auto_solib_add);
-#endif
-	  target_terminal_inferior ();
+	  struct regcache *regcache;
+
+	  if (!ptid_equal (ecs->ptid, inferior_ptid))
+	    context_switch (ecs->ptid);
+	  regcache = get_thread_regcache (ecs->ptid);
+
+	  handle_solib_event ();
+
+	  ecs->event_thread->control.stop_bpstat
+	    = bpstat_stop_status (get_regcache_aspace (regcache),
+				  stop_pc, ecs->ptid, &ecs->ws);
+	  ecs->random_signal
+	    = !bpstat_explains_signal (ecs->event_thread->control.stop_bpstat);
+
+	  if (!ecs->random_signal)
+	    {
+	      /* A catchpoint triggered.  */
+	      ecs->event_thread->suspend.stop_signal = TARGET_SIGNAL_TRAP;
+	      goto process_event_stop_test;
+	    }
 
 	  /* If requested, stop when the dynamic linker notifies
 	     gdb of events.  This allows the user to get control
 	     and place breakpoints in initializer routines for
 	     dynamically loaded objects (among other things).  */
+	  ecs->event_thread->suspend.stop_signal = TARGET_SIGNAL_0;
 	  if (stop_on_solib_events)
 	    {
 	      /* Make sure we print "Stopped due to solib-event" in
@@ -3353,9 +3364,6 @@ handle_inferior_event (struct execution_control_state *ecs)
 	      stop_stepping (ecs);
 	      return;
 	    }
-
-	  /* NOTE drow/2007-05-11: This might be a good place to check
-	     for "catch load".  */
 	}
 
       /* If we are skipping through a shell, or through shared library
@@ -3537,7 +3545,7 @@ handle_inferior_event (struct execution_control_state *ecs)
 
       ecs->event_thread->control.stop_bpstat
 	= bpstat_stop_status (get_regcache_aspace (get_current_regcache ()),
-			      stop_pc, ecs->ptid);
+			      stop_pc, ecs->ptid, &ecs->ws);
 
       /* Note that we're interested in knowing the bpstat actually
 	 causes a stop, not just if it may explain the signal.
@@ -3635,7 +3643,7 @@ handle_inferior_event (struct execution_control_state *ecs)
 
       ecs->event_thread->control.stop_bpstat
 	= bpstat_stop_status (get_regcache_aspace (get_current_regcache ()),
-			      stop_pc, ecs->ptid);
+			      stop_pc, ecs->ptid, &ecs->ws);
       ecs->random_signal
 	= !bpstat_explains_signal (ecs->event_thread->control.stop_bpstat);
 
@@ -4094,11 +4102,12 @@ handle_inferior_event (struct execution_control_state *ecs)
 	 user had set a breakpoint on that inlined code, the missing
 	 skip_inline_frames call would break things.  Fortunately
 	 that's an extremely unlikely scenario.  */
-      if (!pc_at_non_inline_function (aspace, stop_pc)
+      if (!pc_at_non_inline_function (aspace, stop_pc, &ecs->ws)
           && !(ecs->event_thread->suspend.stop_signal == TARGET_SIGNAL_TRAP
                && ecs->event_thread->control.trap_expected
                && pc_at_non_inline_function (aspace,
-                                             ecs->event_thread->prev_pc)))
+                                             ecs->event_thread->prev_pc,
+					     &ecs->ws)))
 	skip_inline_frames (ecs->ptid);
     }
 
@@ -4200,10 +4209,11 @@ handle_inferior_event (struct execution_control_state *ecs)
 	  return;
 	}
 
-      /* See if there is a breakpoint at the current PC.  */
+      /* See if there is a breakpoint/watchpoint/catchpoint/etc. that
+	 handles this event.  */
       ecs->event_thread->control.stop_bpstat
 	= bpstat_stop_status (get_regcache_aspace (get_current_regcache ()),
-			      stop_pc, ecs->ptid);
+			      stop_pc, ecs->ptid, &ecs->ws);
 
       /* Following in case break condition called a
 	 function.  */
@@ -5007,7 +5017,8 @@ process_event_stop_test:
   /* If we're in the return path from a shared library trampoline,
      we want to proceed through the trampoline when stepping.  */
   if (gdbarch_in_solib_return_trampoline (gdbarch,
-					  stop_pc, ecs->stop_func_name))
+					  stop_pc, ecs->stop_func_name)
+      && ecs->event_thread->control.step_over_calls != STEP_OVER_NONE)
     {
       /* Determine where this trampoline returns.  */
       CORE_ADDR real_stop_pc;
@@ -5494,7 +5505,7 @@ insert_exception_resume_breakpoint (struct thread_info *tp,
 				    struct frame_info *frame,
 				    struct symbol *sym)
 {
-  struct gdb_exception e;
+  volatile struct gdb_exception e;
 
   /* We want to ignore errors here.  */
   TRY_CATCH (e, RETURN_MASK_ERROR)
@@ -5518,6 +5529,10 @@ insert_exception_resume_breakpoint (struct thread_info *tp,
 
 	  bp = set_momentary_breakpoint_at_pc (get_frame_arch (frame),
 					       handler, bp_exception_resume);
+
+	  /* set_momentary_breakpoint_at_pc invalidates FRAME.  */
+	  frame = NULL;
+
 	  bp->thread = tp->num;
 	  inferior_thread ()->control.exception_resume_breakpoint = bp;
 	}
@@ -5532,7 +5547,7 @@ static void
 check_exception_resume (struct execution_control_state *ecs,
 			struct frame_info *frame, struct symbol *func)
 {
-  struct gdb_exception e;
+  volatile struct gdb_exception e;
 
   TRY_CATCH (e, RETURN_MASK_ERROR)
     {
@@ -5639,7 +5654,7 @@ keep_going (struct execution_control_state *ecs)
 	}
       else
 	{
-	  struct gdb_exception e;
+	  volatile struct gdb_exception e;
 
 	  /* Stop stepping when inserting breakpoints
 	     has failed.  */
@@ -6068,7 +6083,8 @@ done:
       || last.kind == TARGET_WAITKIND_SIGNALLED
       || last.kind == TARGET_WAITKIND_EXITED
       || last.kind == TARGET_WAITKIND_NO_RESUMED
-      || (!inferior_thread ()->step_multi
+      || (!(inferior_thread ()->step_multi
+	    && inferior_thread ()->control.stop_step)
 	  && !(inferior_thread ()->control.stop_bpstat
 	       && inferior_thread ()->control.proceed_to_finish)
 	  && !inferior_thread ()->control.in_infcall))
@@ -6356,6 +6372,7 @@ Are you sure you want to change it? "),
       {
 	signal_cache_update (-1);
 	target_pass_signals ((int) TARGET_SIGNAL_LAST, signal_pass);
+	target_program_signals ((int) TARGET_SIGNAL_LAST, signal_program);
 
 	if (from_tty)
 	  {
@@ -6436,6 +6453,15 @@ xdb_handle_command (char *args, int from_tty)
 	}
     }
   do_cleanups (old_chain);
+}
+
+enum target_signal
+target_signal_from_command (int num)
+{
+  if (num >= 1 && num <= 15)
+    return (enum target_signal) num;
+  error (_("Only signals 1-15 are valid as numeric signals.\n\
+Use \"info signals\" for a list of symbolic signals."));
 }
 
 /* Print current contents of the tables set by the handle command.
@@ -6860,79 +6886,6 @@ discard_infcall_control_state (struct infcall_control_state *inf_status)
 }
 
 int
-inferior_has_forked (ptid_t pid, ptid_t *child_pid)
-{
-  struct target_waitstatus last;
-  ptid_t last_ptid;
-
-  get_last_target_status (&last_ptid, &last);
-
-  if (last.kind != TARGET_WAITKIND_FORKED)
-    return 0;
-
-  if (!ptid_equal (last_ptid, pid))
-    return 0;
-
-  *child_pid = last.value.related_pid;
-  return 1;
-}
-
-int
-inferior_has_vforked (ptid_t pid, ptid_t *child_pid)
-{
-  struct target_waitstatus last;
-  ptid_t last_ptid;
-
-  get_last_target_status (&last_ptid, &last);
-
-  if (last.kind != TARGET_WAITKIND_VFORKED)
-    return 0;
-
-  if (!ptid_equal (last_ptid, pid))
-    return 0;
-
-  *child_pid = last.value.related_pid;
-  return 1;
-}
-
-int
-inferior_has_execd (ptid_t pid, char **execd_pathname)
-{
-  struct target_waitstatus last;
-  ptid_t last_ptid;
-
-  get_last_target_status (&last_ptid, &last);
-
-  if (last.kind != TARGET_WAITKIND_EXECD)
-    return 0;
-
-  if (!ptid_equal (last_ptid, pid))
-    return 0;
-
-  *execd_pathname = xstrdup (last.value.execd_pathname);
-  return 1;
-}
-
-int
-inferior_has_called_syscall (ptid_t pid, int *syscall_number)
-{
-  struct target_waitstatus last;
-  ptid_t last_ptid;
-
-  get_last_target_status (&last_ptid, &last);
-
-  if (last.kind != TARGET_WAITKIND_SYSCALL_ENTRY &&
-      last.kind != TARGET_WAITKIND_SYSCALL_RETURN)
-    return 0;
-
-  if (!ptid_equal (last_ptid, pid))
-    return 0;
-
-  *syscall_number = last.value.syscall_number;
-  return 1;
-}
-
-int
 ptid_match (ptid_t ptid, ptid_t filter)
 {
   if (ptid_equal (filter, minus_one_ptid))
@@ -6982,7 +6935,7 @@ int execution_direction = EXEC_FORWARD;
 static const char exec_forward[] = "forward";
 static const char exec_reverse[] = "reverse";
 static const char *exec_direction = exec_forward;
-static const char *exec_direction_names[] = {
+static const char *const exec_direction_names[] = {
   exec_forward,
   exec_reverse,
   NULL

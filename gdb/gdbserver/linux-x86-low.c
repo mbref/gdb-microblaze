@@ -20,6 +20,7 @@
 #include <stddef.h>
 #include <signal.h>
 #include <limits.h>
+#include <inttypes.h>
 #include "server.h"
 #include "linux-low.h"
 #include "i387-fp.h"
@@ -28,6 +29,7 @@
 #include "elf/common.h"
 
 #include "gdb_proc_service.h"
+#include "agent.h"
 
 /* Defined in auto-generated file i386-linux.c.  */
 void init_registers_i386_linux (void);
@@ -654,6 +656,7 @@ static void
 x86_linux_prepare_to_resume (struct lwp_info *lwp)
 {
   ptid_t ptid = ptid_of (lwp);
+  int clear_status = 0;
 
   if (lwp->arch_private->debug_registers_changed)
     {
@@ -664,14 +667,23 @@ x86_linux_prepare_to_resume (struct lwp_info *lwp)
 	= &proc->private->arch_private->debug_reg_state;
 
       for (i = DR_FIRSTADDR; i <= DR_LASTADDR; i++)
-	x86_linux_dr_set (ptid, i, state->dr_mirror[i]);
+	if (state->dr_ref_count[i] > 0)
+	  {
+	    x86_linux_dr_set (ptid, i, state->dr_mirror[i]);
+
+	    /* If we're setting a watchpoint, any change the inferior
+	       had done itself to the debug registers needs to be
+	       discarded, otherwise, i386_low_stopped_data_address can
+	       get confused.  */
+	    clear_status = 1;
+	  }
 
       x86_linux_dr_set (ptid, DR_CONTROL, state->dr_control_mirror);
 
       lwp->arch_private->debug_registers_changed = 0;
     }
 
-  if (lwp->stopped_by_watchpoint)
+  if (clear_status || lwp->stopped_by_watchpoint)
     x86_linux_dr_set (ptid, DR_STATUS, 0);
 }
 
@@ -906,13 +918,13 @@ siginfo_from_compat_siginfo (siginfo_t *to, compat_siginfo_t *from)
    INF.  */
 
 static int
-x86_siginfo_fixup (struct siginfo *native, void *inf, int direction)
+x86_siginfo_fixup (siginfo_t *native, void *inf, int direction)
 {
 #ifdef __x86_64__
   /* Is the inferior 32-bit?  If so, then fixup the siginfo object.  */
   if (register_size (0) == 4)
     {
-      if (sizeof (struct siginfo) != sizeof (compat_siginfo_t))
+      if (sizeof (siginfo_t) != sizeof (compat_siginfo_t))
 	fatal ("unexpected difference in siginfo");
 
       if (direction == 0)
@@ -1096,10 +1108,7 @@ x86_arch_setup (void)
 {
 #ifdef __x86_64__
   int pid = pid_of (get_thread_lwp (current_inferior));
-  char *file = linux_child_pid_to_exec_file (pid);
-  int use_64bit = elf_64_file_p (file);
-
-  free (file);
+  int use_64bit = linux_pid_exe_is_elf_64_file (pid);
 
   if (use_64bit < 0)
     {
@@ -1192,6 +1201,8 @@ amd64_install_fast_tracepoint_jump_pad (CORE_ADDR tpoint, CORE_ADDR tpaddr,
 {
   unsigned char buf[40];
   int i, offset;
+  int64_t loffset;
+
   CORE_ADDR buildaddr = *jump_entry;
 
   /* Build the jump pad.  */
@@ -1315,7 +1326,17 @@ amd64_install_fast_tracepoint_jump_pad (CORE_ADDR tpoint, CORE_ADDR tpaddr,
   *adjusted_insn_addr_end = buildaddr;
 
   /* Finally, write a jump back to the program.  */
-  offset = (tpaddr + orig_size) - (buildaddr + sizeof (jump_insn));
+
+  loffset = (tpaddr + orig_size) - (buildaddr + sizeof (jump_insn));
+  if (loffset > INT_MAX || loffset < INT_MIN)
+    {
+      sprintf (err,
+	       "E.Jump back from jump pad too far from tracepoint "
+	       "(offset 0x%" PRIx64 " > int32).", loffset);
+      return 1;
+    }
+
+  offset = (int) loffset;
   memcpy (buf, jump_insn, sizeof (jump_insn));
   memcpy (buf + 1, &offset, 4);
   append_insns (&buildaddr, sizeof (jump_insn), buf);
@@ -1324,7 +1345,17 @@ amd64_install_fast_tracepoint_jump_pad (CORE_ADDR tpoint, CORE_ADDR tpaddr,
      is always done last (by our caller actually), so that we can
      install fast tracepoints with threads running.  This relies on
      the agent's atomic write support.  */
-  offset = *jump_entry - (tpaddr + sizeof (jump_insn));
+  loffset = *jump_entry - (tpaddr + sizeof (jump_insn));
+  if (loffset > INT_MAX || loffset < INT_MIN)
+    {
+      sprintf (err,
+	       "E.Jump pad too far from tracepoint "
+	       "(offset 0x%" PRIx64 " > int32).", loffset);
+      return 1;
+    }
+
+  offset = (int) loffset;
+
   memcpy (buf, jump_insn, sizeof (jump_insn));
   memcpy (buf + 1, &offset, 4);
   memcpy (jjump_pad_insn, buf, sizeof (jump_insn));
@@ -1579,7 +1610,7 @@ x86_get_min_fast_tracepoint_insn_len (void)
     return 5;
 #endif
 
-  if (in_process_agent_loaded ())
+  if (agent_loaded_p ())
     {
       char errbuf[IPA_BUFSIZ];
 
@@ -2937,6 +2968,8 @@ struct linux_target_ops the_low_target =
   NULL,
   NULL,
   NULL,
+  NULL,
+  NULL, /* fetch_register */
   x86_get_pc,
   x86_set_pc,
   x86_breakpoint,

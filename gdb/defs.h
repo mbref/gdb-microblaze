@@ -439,6 +439,10 @@ extern struct cleanup *make_bpstat_clear_actions_cleanup (void);
 
 extern int producer_is_gcc_ge_4 (const char *producer);
 
+#ifdef HAVE_WAITPID
+extern pid_t wait_to_die_with_timeout (pid_t pid, int *status, int timeout);
+#endif
+
 
 /* Annotation stuff.  */
 
@@ -578,7 +582,7 @@ extern CORE_ADDR string_to_core_addr (const char *my_string);
 extern char *hex_string (LONGEST);
 extern char *hex_string_custom (LONGEST, int);
 
-extern void fprintf_symbol_filtered (struct ui_file *, char *,
+extern void fprintf_symbol_filtered (struct ui_file *, const char *,
 				     enum language, int);
 
 extern void perror_with_name (const char *) ATTRIBUTE_NORETURN;
@@ -748,6 +752,35 @@ extern struct command_line *read_command_lines_1 (char * (*) (void), int,
 
 extern void free_command_lines (struct command_line **);
 
+/* Parameters of the "info proc" command.  */
+
+enum info_proc_what
+  {
+    /* Display the default cmdline, cwd and exe outputs.  */
+    IP_MINIMAL,
+
+    /* Display `info proc mappings'.  */
+    IP_MAPPINGS,
+
+    /* Display `info proc status'.  */
+    IP_STATUS,
+
+    /* Display `info proc stat'.  */
+    IP_STAT,
+
+    /* Display `info proc cmdline'.  */
+    IP_CMDLINE,
+
+    /* Display `info proc exe'.  */
+    IP_EXE,
+
+    /* Display `info proc cwd'.  */
+    IP_CWD,
+
+    /* Display all of the above.  */
+    IP_ALL
+  };
+
 /* String containing the current directory (what getwd would return).  */
 
 extern char *current_directory;
@@ -915,6 +948,7 @@ enum gdb_osabi
   GDB_OSABI_DICOS,
   GDB_OSABI_DARWIN,
   GDB_OSABI_SYMBIAN,
+  GDB_OSABI_OPENVMS,
 
   GDB_OSABI_INVALID		/* keep this last */
 };

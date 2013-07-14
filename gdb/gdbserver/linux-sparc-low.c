@@ -281,8 +281,10 @@ struct linux_target_ops the_low_target = {
   sparc_num_regs,
   /* No regmap needs to be provided since this impl. doesn't use USRREGS.  */
   NULL,
+  NULL,
   sparc_cannot_fetch_register,
   sparc_cannot_store_register,
+  NULL, /* fetch_register */
   sparc_get_pc,
   /* No sparc_set_pc is needed.  */
   NULL,

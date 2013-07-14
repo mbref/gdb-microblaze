@@ -42,8 +42,8 @@ AC_CHECK_HEADERS(sgtty.h termio.h termios.h sys/reg.h string.h dnl
 		 stdlib.h unistd.h dnl
 		 errno.h fcntl.h signal.h sys/file.h malloc.h dnl
 		 sys/ioctl.h netinet/in.h sys/socket.h netdb.h dnl
-		 netinet/tcp.h arpa/inet.h sys/wait.h)
-AC_CHECK_FUNCS(pread pwrite pread64)
+		 netinet/tcp.h arpa/inet.h sys/wait.h sys/un.h)
+AC_CHECK_FUNCS(pread pwrite pread64 readlink)
 AC_REPLACE_FUNCS(memmem vasprintf vsnprintf)
 
 # Check for UST
@@ -167,6 +167,10 @@ AC_CHECK_TYPES(socklen_t, [], [],
 [#include <sys/types.h>
 #include <sys/socket.h>
 ])
+
+AC_CHECK_TYPES([Elf32_auxv_t, Elf64_auxv_t], [], [],
+#include <elf.h>
+)
 
 ACX_PKGVERSION([GDB])
 ACX_BUGURL([http://www.gnu.org/software/gdb/bugs/])

@@ -279,17 +279,9 @@ extern void record_line (struct subfile *subfile, int line, CORE_ADDR pc);
 
 extern void start_symtab (char *name, char *dirname, CORE_ADDR start_addr);
 
-extern int hashname (char *name);
+extern int hashname (const char *name);
 
 extern void free_pending_blocks (void);
-
-/* FIXME: Note that this is used only in buildsym.c and dstread.c,
-   which should be fixed to not need direct access to
-   record_pending_block.  */
-
-extern void record_pending_block (struct objfile *objfile,
-				  struct block *block,
-				  struct pending_block *opblock);
 
 /* Record the name of the debug format in the current pending symbol
    table.  FORMAT must be a string with a lifetime at least as long as

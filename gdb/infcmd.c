@@ -664,7 +664,7 @@ proceed_thread_callback (struct thread_info *thread, void *arg)
   return 0;
 }
 
-void
+static void
 ensure_valid_thread (void)
 {
   if (ptid_equal (inferior_ptid, null_ptid)
@@ -676,7 +676,7 @@ ensure_valid_thread (void)
    is likely to mix up recorded and live target data.  So simply
    disallow those commands.  */
 
-void
+static void
 ensure_not_tfind_mode (void)
 {
   if (get_traceframe_number () >= 0)
@@ -1036,7 +1036,7 @@ step_once (int skip_subroutines, int single_inst, int count, int thread)
 	    tp->control.step_range_start = tp->control.step_range_end = 1;
 	  else if (tp->control.step_range_end == 0)
 	    {
-	      char *name;
+	      const char *name;
 
 	      if (find_pc_partial_function (pc, &name,
 					    &tp->control.step_range_start,
@@ -1471,23 +1471,23 @@ static void
 print_return_value (struct type *func_type, struct type *value_type)
 {
   struct value *value = get_return_value (func_type, value_type);
-  struct cleanup *old_chain;
-  struct ui_stream *stb;
   struct ui_out *uiout = current_uiout;
 
   if (value)
     {
       struct value_print_options opts;
+      struct ui_file *stb;
+      struct cleanup *old_chain;
 
       /* Print it.  */
-      stb = ui_out_stream_new (uiout);
-      old_chain = make_cleanup_ui_out_stream_delete (stb);
+      stb = mem_fileopen ();
+      old_chain = make_cleanup_ui_file_delete (stb);
       ui_out_text (uiout, "Value returned is ");
       ui_out_field_fmt (uiout, "gdb-result-var", "$%d",
 			record_latest_value (value));
       ui_out_text (uiout, " = ");
       get_raw_print_options (&opts);
-      value_print (value, stb->stream, &opts);
+      value_print (value, stb, &opts);
       ui_out_field_stream (uiout, "return-value", stb);
       ui_out_text (uiout, "\n");
       do_cleanups (old_chain);
@@ -1651,6 +1651,9 @@ finish_forward (struct symbol *function, struct frame_info *frame)
   breakpoint = set_momentary_breakpoint (gdbarch, sal,
 					 get_stack_frame_id (frame),
                                          bp_finish);
+
+  /* set_momentary_breakpoint invalidates FRAME.  */
+  frame = NULL;
 
   old_chain = make_cleanup_delete_breakpoint (breakpoint);
 
@@ -2171,7 +2174,7 @@ registers_info (char *addr_exp, int fpregs)
 		struct value_print_options opts;
 		struct value *val = value_of_user_reg (regnum, frame);
 
-		printf_filtered ("%s: ", start);
+		printf_filtered ("%.*s: ", (int) (end - start), start);
 		get_formatted_print_options (&opts, 'x');
 		val_print_scalar_formatted (check_typedef (value_type (val)),
 					    value_contents_for_printing (val),
@@ -2806,9 +2809,87 @@ unset_command (char *args, int from_tty)
   help_list (unsetlist, "unset ", -1, gdb_stdout);
 }
 
+/* Implement `info proc' family of commands.  */
+
+static void
+info_proc_cmd_1 (char *args, enum info_proc_what what, int from_tty)
+{
+  struct gdbarch *gdbarch = get_current_arch ();
+
+  if (gdbarch_info_proc_p (gdbarch))
+    gdbarch_info_proc (gdbarch, args, what);
+  else
+    target_info_proc (args, what);
+}
+
+/* Implement `info proc' when given without any futher parameters.  */
+
+static void
+info_proc_cmd (char *args, int from_tty)
+{
+  info_proc_cmd_1 (args, IP_MINIMAL, from_tty);
+}
+
+/* Implement `info proc mappings'.  */
+
+static void
+info_proc_cmd_mappings (char *args, int from_tty)
+{
+  info_proc_cmd_1 (args, IP_MAPPINGS, from_tty);
+}
+
+/* Implement `info proc stat'.  */
+
+static void
+info_proc_cmd_stat (char *args, int from_tty)
+{
+  info_proc_cmd_1 (args, IP_STAT, from_tty);
+}
+
+/* Implement `info proc status'.  */
+
+static void
+info_proc_cmd_status (char *args, int from_tty)
+{
+  info_proc_cmd_1 (args, IP_STATUS, from_tty);
+}
+
+/* Implement `info proc cwd'.  */
+
+static void
+info_proc_cmd_cwd (char *args, int from_tty)
+{
+  info_proc_cmd_1 (args, IP_CWD, from_tty);
+}
+
+/* Implement `info proc cmdline'.  */
+
+static void
+info_proc_cmd_cmdline (char *args, int from_tty)
+{
+  info_proc_cmd_1 (args, IP_CMDLINE, from_tty);
+}
+
+/* Implement `info proc exe'.  */
+
+static void
+info_proc_cmd_exe (char *args, int from_tty)
+{
+  info_proc_cmd_1 (args, IP_EXE, from_tty);
+}
+
+/* Implement `info proc all'.  */
+
+static void
+info_proc_cmd_all (char *args, int from_tty)
+{
+  info_proc_cmd_1 (args, IP_ALL, from_tty);
+}
+
 void
 _initialize_infcmd (void)
 {
+  static struct cmd_list_element *info_proc_cmdlist;
   struct cmd_list_element *c = NULL;
 
   /* Add the filename of the terminal connected to inferior I/O.  */
@@ -3035,4 +3116,39 @@ Register name as argument means describe only that register."));
 
   add_info ("vector", vector_info,
 	    _("Print the status of the vector unit\n"));
+
+  add_prefix_cmd ("proc", class_info, info_proc_cmd,
+		  _("\
+Show /proc process information about any running process.\n\
+Specify any process id, or use the program being debugged by default."),
+		  &info_proc_cmdlist, "info proc ",
+		  1/*allow-unknown*/, &infolist);
+
+  add_cmd ("mappings", class_info, info_proc_cmd_mappings, _("\
+List of mapped memory regions."),
+	   &info_proc_cmdlist);
+
+  add_cmd ("stat", class_info, info_proc_cmd_stat, _("\
+List process info from /proc/PID/stat."),
+	   &info_proc_cmdlist);
+
+  add_cmd ("status", class_info, info_proc_cmd_status, _("\
+List process info from /proc/PID/status."),
+	   &info_proc_cmdlist);
+
+  add_cmd ("cwd", class_info, info_proc_cmd_cwd, _("\
+List current working directory of the process."),
+	   &info_proc_cmdlist);
+
+  add_cmd ("cmdline", class_info, info_proc_cmd_cmdline, _("\
+List command line arguments of the process."),
+	   &info_proc_cmdlist);
+
+  add_cmd ("exe", class_info, info_proc_cmd_exe, _("\
+List absolute filename for executable of the process."),
+	   &info_proc_cmdlist);
+
+  add_cmd ("all", class_info, info_proc_cmd_all, _("\
+List all available /proc info."),
+	   &info_proc_cmdlist);
 }
