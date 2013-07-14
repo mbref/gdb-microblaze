@@ -115,6 +115,7 @@ SFILES=	$(srcdir)/gdbreplay.c $(srcdir)/inferiors.c $(srcdir)/dll.c \
 	$(srcdir)/linux-ia64-low.c $(srcdir)/linux-low.c \
 	$(srcdir)/linux-m32r-low.c \
 	$(srcdir)/linux-m68k-low.c $(srcdir)/linux-mips-low.c \
+	$(srcdir)/linux-microblaze-low.c \
 	$(srcdir)/linux-ppc-low.c \
 	$(srcdir)/linux-s390-low.c \
 	$(srcdir)/linux-sh-low.c $(srcdir)/linux-sparc-low.c \
@@ -284,6 +285,7 @@ clean:
 	rm -f i386-avx.c i386-avx-linux.c
 	rm -f amd64-avx.c amd64-avx-linux.c
 	rm -f i386-mmx.c i386-mmx-linux.c
+	rm -f reg-microblaze.c
 
 maintainer-clean realclean distclean: clean
 	rm -f nm.h tm.h xm.h config.status config.h stamp-h config.log
@@ -472,6 +474,8 @@ linux-ia64-low.o: linux-ia64-low.c $(linux_low_h) $(server_h)
 linux-m32r-low.o: linux-m32r-low.c $(linux_low_h) $(server_h)
 linux-mips-low.o: linux-mips-low.c $(linux_low_h) $(server_h) \
 	$(gdb_proc_service_h)
+linux-microblaze-low.o: linux-microblaze-low.c $(linux_low_h) $(server_h) \
+	$(gdb_proc_service_h)
 linux-ppc-low.o: linux-ppc-low.c $(linux_low_h) $(server_h)
 linux-s390-low.o: linux-s390-low.c $(linux_low_h) $(server_h)
 linux-sh-low.o: linux-sh-low.c $(linux_low_h) $(server_h)
@@ -557,6 +561,9 @@ mips-dsp-linux.c : $(srcdir)/../regformats/mips-dsp-linux.dat $(regdat_sh)
 mips64-linux.o : mips64-linux.c $(regdef_h)
 mips64-linux.c : $(srcdir)/../regformats/mips64-linux.dat $(regdat_sh)
 	$(SHELL) $(regdat_sh) $(srcdir)/../regformats/mips64-linux.dat mips64-linux.c
+reg-microblaze.o : reg-microblaze.c $(regdef_h)
+reg-microblaze.c : $(srcdir)/../regformats/reg-microblaze.dat $(regdat_sh)
+	$(SHELL) $(regdat_sh) $(srcdir)/../regformats/reg-microblaze.dat reg-microblaze.c
 mips64-dsp-linux.o : mips64-dsp-linux.c $(regdef_h)
 mips64-dsp-linux.c : $(srcdir)/../regformats/mips64-dsp-linux.dat $(regdat_sh)
 	$(SHELL) $(regdat_sh) $(srcdir)/../regformats/mips64-dsp-linux.dat mips64-dsp-linux.c
