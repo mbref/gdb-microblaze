@@ -24,6 +24,7 @@
 #include "vec.h"
 #include "ax.h"
 #include "command.h"
+#include "break-common.h"
 
 struct value;
 struct block;
@@ -214,15 +215,6 @@ enum bpdisp
     disp_disable,		/* Disable it */
     disp_donttouch		/* Leave it alone */
   };
-
-enum target_hw_bp_type
-  {
-    hw_write   = 0, 		/* Common  HW watchpoint */
-    hw_read    = 1, 		/* Read    HW watchpoint */
-    hw_access  = 2, 		/* Access  HW watchpoint */
-    hw_execute = 3		/* Execute HW breakpoint */
-  };
-
 
 /* Status of breakpoint conditions used when synchronizing
    conditions with the target.  */
@@ -595,8 +587,7 @@ struct breakpoint_ops
      This function is called inside `create_breakpoint'.  */
   void (*create_breakpoints_sal) (struct gdbarch *,
 				  struct linespec_result *,
-				  struct linespec_sals *, char *,
-				  char *,
+				  char *, char *,
 				  enum bptype, enum bpdisp, int, int,
 				  int, const struct breakpoint_ops *,
 				  int, int, int, unsigned);
@@ -731,7 +722,8 @@ struct breakpoint
        there is no condition.  */
     char *cond_string;
 
-    /* String form of extra parameters, or NULL if there are none.  */
+    /* String form of extra parameters, or NULL if there are none.
+     Malloc'd.  */
     char *extra_string;
 
     /* Holds the address of the related watchpoint_scope breakpoint
@@ -1217,6 +1209,7 @@ extern void tbreak_command (char *, int);
 extern struct breakpoint_ops base_breakpoint_ops;
 extern struct breakpoint_ops bkpt_breakpoint_ops;
 extern struct breakpoint_ops tracepoint_breakpoint_ops;
+extern struct breakpoint_ops dprintf_breakpoint_ops;
 
 extern void initialize_breakpoint_ops (void);
 
@@ -1245,6 +1238,7 @@ extern void
 				 char *addr_string,
 				 const struct breakpoint_ops *ops,
 				 int tempflag,
+				 int enabled,
 				 int from_tty);
 
 extern void init_catchpoint (struct breakpoint *b,
@@ -1274,7 +1268,7 @@ enum breakpoint_create_flags
 extern int create_breakpoint (struct gdbarch *gdbarch, char *arg,
 			      char *cond_string, int thread,
 			      char *extra_string,
-			      int parse_condition_and_thread,
+			      int parse_arg,
 			      int tempflag, enum bptype wanted_type,
 			      int ignore_count,
 			      enum auto_boolean pending_break_support,
@@ -1558,8 +1552,8 @@ extern int user_breakpoint_p (struct breakpoint *);
 /* Attempt to determine architecture of location identified by SAL.  */
 extern struct gdbarch *get_sal_arch (struct symtab_and_line sal);
 
-extern void handle_solib_event (void);
-
 extern void breakpoint_free_objfile (struct objfile *objfile);
+
+extern char *ep_parse_optional_if_clause (char **arg);
 
 #endif /* !defined (BREAKPOINT_H) */

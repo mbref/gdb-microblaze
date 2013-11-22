@@ -200,7 +200,7 @@ clone_program_space (struct program_space *dest, struct program_space *src)
     exec_file_attach (src->pspace_exec_filename, 0);
 
   if (src->symfile_object_file != NULL)
-    symbol_file_add_main (src->symfile_object_file->name, 0);
+    symbol_file_add_main (objfile_name (src->symfile_object_file), 0);
 
   do_cleanups (old_chain);
   return dest;
@@ -471,7 +471,8 @@ save_current_space_and_thread (void)
   /* If restoring to null thread, we need to restore the pspace as
      well, hence, we need to save the current program space first.  */
   old_chain = save_current_program_space ();
-  save_current_inferior ();
+  /* There's no need to save the current inferior here.
+     That is handled by make_cleanup_restore_current_thread.  */
   make_cleanup_restore_current_thread ();
 
   return old_chain;
